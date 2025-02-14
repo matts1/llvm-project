@@ -2546,12 +2546,25 @@ static void flushDiagnostics(Sema &S, const sema::FunctionScopeInfo *fscope) {
 class CallableVisitor : public DynamicRecursiveASTVisitor {
 private:
   llvm::function_ref<void(const Decl *)> Callback;
+  const unsigned int TUModuleID;
 
 public:
-  CallableVisitor(llvm::function_ref<void(const Decl *)> Callback)
-      : Callback(Callback) {
+  CallableVisitor(llvm::function_ref<void(const Decl *)> Callback,
+                  unsigned int TUModuleID)
+      : Callback(Callback), TUModuleID(TUModuleID) {
     ShouldVisitTemplateInstantiations = true;
     ShouldVisitImplicitCode = false;
+  }
+
+  bool TraverseDecl(Decl *Node) override {
+    // For performance reasons, only validate the current translation unit's
+    // module, and not modules it depends on.
+    // See https://issues.chromium.org/issues/351909443 for details.
+    if (Node->getOwningModuleID() == TUModuleID) {
+      return DynamicRecursiveASTVisitor::TraverseDecl(Node);
+    } else {
+      return true;
+    }
   }
 
   bool VisitFunctionDecl(FunctionDecl *Node) override {
@@ -2633,7 +2646,7 @@ void clang::sema::AnalysisBasedWarnings::IssueWarnings(
                        SourceLocation()) ||
       (!Diags.isIgnored(diag::warn_unsafe_buffer_libc_call, SourceLocation()) &&
        S.getLangOpts().CPlusPlus /* only warn about libc calls in C++ */)) {
-    CallableVisitor(CallAnalyzers).TraverseTranslationUnitDecl(TU);
+    CallableVisitor(CallAnalyzers, TU->getOwningModuleID()).TraverseTranslationUnitDecl(TU);
   }
 }
 
